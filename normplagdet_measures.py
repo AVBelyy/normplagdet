@@ -61,10 +61,10 @@ __all__ = ["macro_avg_recall_and_precision", "micro_avg_recall_and_precision",
 
 
 from collections import namedtuple
+from functools import reduce
 import getopt
 import glob
 import math
-from numpy import int8 as npint8
 from numpy.ma import zeros, sum as npsum
 import os
 import sys
@@ -77,6 +77,18 @@ SREF, SOFF, SLEN = 'source_reference', 'source_offset', 'source_length'
 EXT = 'is_external'
 Annotation = namedtuple('Annotation', [TREF, TOFF, TLEN, SREF, SOFF, SLEN, EXT])
 TREF, TOFF, TLEN, SREF, SOFF, SLEN, EXT = list(range(7))
+
+
+class MultiAnnotation:
+    def __init__(self, ref):
+        self.ref = ref
+        self.begin = []
+        self.end = []
+        self.length = 0
+
+    def __len__(self):
+        return reduce((lambda l, i: l + self.end[i] - self.begin[i]), range(self.length), 0)
+
 
 plag_path_ = None
 
@@ -91,21 +103,8 @@ def macro_avg_recall_and_precision(cases, detections):
 def micro_avg_recall_and_precision(cases, detections):
     """Returns tuple (rec, prec); the micro-averaged recall and precision of the
        detections in detecting the plagiarism cases"""
-    if len(cases) == 0 and len(detections) == 0:
-        return 1, 1
-    if len(cases) == 0 or len(detections) == 0:
-        return 0, 0
-    num_plagiarized, num_detected, num_plagiarized_detected = 0, 0, 0  # chars
-    num_plagiarized += count_chars(cases)
-    num_detected += count_chars(detections)
-    detections = true_detections(cases, detections)
-    num_plagiarized_detected += count_chars(detections)
-    rec, prec = 0, 0
-    if num_plagiarized > 0:
-        rec = num_plagiarized_detected / num_plagiarized
-    if num_detected > 0:
-        prec = num_plagiarized_detected / num_detected
-    return rec, prec
+    return micro_avg_recall(cases, detections), \
+           micro_avg_precision(cases, detections)
 
 
 def granularity(cases, detections):
@@ -135,6 +134,12 @@ def plagdet_score(rec, prec, gran):
     return ((2 * rec * prec) / (rec + prec)) / math.log(1 + gran, 2)
 
 
+def macro_avg_precision(cases, detections):
+    """The macro-averaged precision of the detections in detecting the plagiarism cases."""
+    # Observe the difference to calling 'macro_avg_recall(cases, detections)'.
+    return macro_avg_recall(detections, cases)
+
+
 def macro_avg_recall(cases, detections, debug=False):
     """Recall of the detections in detecting plagiarism cases."""
     if len(cases) == 0 and len(detections) == 0:
@@ -157,6 +162,92 @@ def macro_avg_recall(cases, detections, debug=False):
     else:
         return sum(recall_per_case) / num_cases
 
+
+def micro_avg_precision(cases, detections):
+    """The micro-averaged precision of the detections in detecting the plagiarism cases."""
+    return micro_avg_recall(detections, cases)
+
+
+def micro_avg_recall(cases, detections):
+    """The micro-averaged recall of the detections in detecting the plagiarism cases."""
+    if len(cases) == 0 and len(detections) == 0:
+        return 1
+    elif len(cases) == 0 or len(detections) == 0:
+        return 0
+    cases_detections = true_detections(cases, detections)
+    num_summands, denom_summands = [], []
+    for ref, off, length in ([TREF, TOFF, TLEN], [SREF, SOFF, SLEN]):
+        docs = index_annotations(cases, ref)
+        num_summand, denom_summand = 0, 0
+        for doc in docs:
+            doc_cases = docs[doc]
+            doc_detections = list(set(map(lambda case: cases_detections[case], doc_cases)))
+
+            doc_cases_multiannotation = collapse_annotations(doc_cases, doc, off, length)
+            doc_detections_multiannotation = collapse_annotations(doc_detections, doc, off, length)
+            doc_intersection = intersect_multiannotations(doc_cases_multiannotation, doc_detections_multiannotation)
+
+            doc_length = count_chars_in_doc(doc, False)
+            cases_length = len(doc_cases_multiannotation)
+            detections_length = len(doc_detections_multiannotation)
+            intersection_length = len(doc_intersection)
+
+            a = max(0, cases_length + detections_length - doc_length)
+            b = min(cases_length, detections_length)
+            q = intersection_length - a
+            l = cases_length - a
+            w = (b - a) / doc_length
+
+            num_summand += q * w
+            denom_summand += l * w
+        num_summands.append(num_summand)
+        denom_summands.append(denom_summand)
+    return (num_summands[0] + num_summands[1]) / (denom_summands[0] + denom_summands[1])
+
+
+def collapse_annotations(annotations, ref, xoff, xlen):
+    """Returns a multi-annotation consisting of annotations in one document."""
+    ma = MultiAnnotation(ref)
+    for ann in annotations:
+        insert_annotation_into_multi(ann, ma, xoff, xlen)
+    return ma
+
+
+def insert_annotation_into_multi(ann, ma, xoff, xlen):
+    """Inserts an annotation inside a multi-annotation."""
+    begin = 0
+    while begin < ma.length and ann[xoff] > ma.end[begin]:
+        begin += 1
+    end = begin
+    while end < ma.length and ann[xoff] + ann[xlen] >= ma.begin[end]:
+        end += 1
+    new_begin = min(ann[xoff], ma.begin[begin])
+    new_end = max(ann[xoff] + ann[xlen], ma.end[end - 1])
+    ma.begin = [ma.begin[i] for i in range(begin)] + [new_begin] + [ma.begin[i] for i in range(end, ma.length)]
+    ma.end = [ma.end[i] for i in range(begin)] + [new_end] + [ma.end[i] for i in range(end, ma.length)]
+    ma.length = len(ma.begin)
+
+
+def intersect_multiannotations(ma1, ma2):
+    """Intersect multi-annotations ma1 and ma2."""
+    ma = MultiAnnotation(ma1.ref)
+    i1, i2 = 0, 0
+    while i1 < ma1.length and i2 < ma2.length:
+        if ma1.end[i1] <= ma2.begin[i2]:
+            i1 += 1
+            continue
+        if ma2.end[i2] <= ma1.begin[i1]:
+            i2 += 1
+            continue
+        ma.begin.append(max(ma1.begin[i1], ma2.begin[i2]))
+        ma.end.append(min(ma1.end[i1], ma2.end[i2]))
+        if ma1.end[i1] < ma2.end[i2]:
+            i1 += 1
+        else:
+            i2 += 1
+    return ma
+
+
 len_cache = {}
 def count_chars_in_doc(file_path, is_susp):
     global len_cache
@@ -168,6 +259,7 @@ def count_chars_in_doc(file_path, is_susp):
         len_cache[file_path, is_susp] = len(open(file_path_).read())
 
     return len_cache[file_path, is_susp]
+
 
 def case_recall(case, detections, src_len, susp_len):
     """Recall of the detections in detecting the plagiarism case."""
@@ -205,17 +297,11 @@ def case_recall(case, detections, src_len, susp_len):
         return norm_num / norm_denom
 
 
-def macro_avg_precision(cases, detections):
-    """Precision of the detections in detecting the plagiarism cases."""
-    # Observe the difference to calling 'macro_avg_recall(cases, detections)'.
-    return macro_avg_recall(detections, cases)
-
-
 def true_detections(cases, detections):
     """Recreates the detections so that only true detections remain and so that
        the true detections are reduced to the passages that actually overlap
        with the respective detected case."""
-    true_dets = list()
+    true_dets = dict()
     case_index = index_annotations(cases)
     det_index = index_annotations(detections)
     for tref in case_index:
@@ -224,8 +310,7 @@ def true_detections(cases, detections):
             continue
         for case in cases:
             case_dets = (det for det in detections if is_overlapping(case, det))
-            true_case_dets = (overlap_annotation(case, det) for det in case_dets)
-            true_dets.extend(true_case_dets)
+            true_dets.setdefault(case, []).extend(case_dets)
     return true_dets
 
 
