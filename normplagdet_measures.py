@@ -263,38 +263,38 @@ def count_chars_in_doc(file_path, is_susp):
 
 def case_recall(case, detections, src_len, susp_len):
     """Recall of the detections in detecting the plagiarism case."""
-    # Calculate number of chars from the detections that cover the case,
-    # separately for suspicious and source parts.
+
     Rs_detections = [det for det in detections if is_overlapping(case, det)]
-    Rs_susp = count_chars2(Rs_detections, TREF, TOFF, TLEN)
-    Rs_src  = count_chars2(Rs_detections, SREF, SOFF, SLEN)
 
-    # Calculate overlap size between the case and the detections,
-    # separately for suspicious and source parts.
-    Rss_susp, Rss_src = overlapping_chars(case, detections)
+    normalized_num = 0.
+    normalized_denom = 0.
+    for xref, xoff, xlen, dlen in ((TREF, TOFF, TLEN, susp_len), (SREF, SOFF, SLEN, src_len)):
+        # Calculate number of chars from the detections that cover the case.
+        detections_len = count_chars2(Rs_detections, xref, xoff, xlen)
 
-    # Estimate lower (a) and upper (b) bounds of overlap size (Rss),
-    # separately for suspicious and source parts.
-    a_susp = max(0, Rs_susp + case.this_length - susp_len)
-    a_src = max(0, Rs_src + case.source_length - src_len)
-    b_susp = min(Rs_susp, case.this_length)
-    b_src = min(Rs_src, case.source_length)
+        # Calculate intersection length between the case and the detections.
+        intersection_len = overlapping_chars(case, detections, xoff, xlen)
 
-    # Normalize overlap size according to:
-    #   1) overlap size lower and upper bounds,
-    #   2) document length,
-    # separately for suspicious and source parts.
-    q_susp, q_src = Rss_susp - a_susp, Rss_src - a_src
-    l_susp, l_src = case.this_length - a_susp, case.source_length - a_src
-    w_susp, w_src = (b_susp - a_susp) / susp_len, (b_src - a_src) / src_len
+        # Estimate lower (a) and upper (b) bounds of intersection length.
+        a = max(0, detections_len + case[xlen] - dlen)
+        b = min(detections_len, case[xlen])
+
+        # Normalize overlap size according to:
+        #   1) overlap size lower and upper bounds,
+        #   2) document length.
+        q = intersection_len - a
+        l = case[xlen] - a
+        w = (b - a) / dlen
+
+        # Calculate part of case recall.
+        normalized_num += q * w
+        normalized_denom += l * w
 
     # Calculate normalized case recall.
-    norm_num = q_susp * w_susp + q_src * w_src
-    norm_denom = l_susp * w_susp + l_src * w_src
-    if norm_denom == 0:
+    if normalized_denom == 0:
         return 1
     else:
-        return norm_num / norm_denom
+        return normalized_num / normalized_denom
 
 
 def true_detections(cases, detections):
@@ -365,17 +365,15 @@ def count_chars2(annotations, xref, xoff, xlen):
     return num_chars
 
 
-def overlapping_chars(ann1, annotations):
+def overlapping_chars(ann1, annotations, xoff, xlen):
     """Returns the number of chars in ann1 that overlap with the annotations."""
     annotations = [ann2 for ann2 in annotations if is_overlapping(ann1, ann2)]
     if len(annotations) == 0 or not isinstance(ann1, Annotation):
-        return 0, 0
-    this_overlaps = zeros(ann1[TLEN], dtype=bool)
-    source_overlaps = zeros(ann1[SLEN], dtype=bool)
+        return 0
+    overlaps = zeros(ann1[xlen], dtype=bool)
     for ann2 in annotations:
-        mark_overlapping_chars(this_overlaps, ann1, ann2, TOFF, TLEN)
-        mark_overlapping_chars(source_overlaps, ann1, ann2, SOFF, SLEN)
-    return npsum(this_overlaps), npsum(source_overlaps)
+        mark_overlapping_chars(overlaps, ann1, ann2, xoff, xlen)
+    return npsum(overlaps)
 
 
 def mark_overlapping_chars(char_bits, ann1, ann2, xoff, xlen):
