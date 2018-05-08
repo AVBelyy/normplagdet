@@ -149,16 +149,13 @@ def macro_avg_recall(cases, detections, debug=False):
         if not detections:  # No detections for document tref.
             continue
         for case in cases:
-            src_len = count_chars_in_doc(case.source_reference, False)
-            susp_len = count_chars_in_doc(case.this_reference, True)
+            src_len = count_chars_in_doc(case[SREF], False)
+            susp_len = count_chars_in_doc(case[TREF], True)
             recall_per_case.append(case_recall(case, detections, src_len, susp_len))
     if debug:
         return sum(recall_per_case) / num_cases, recall_per_case
     else:
         return sum(recall_per_case) / num_cases
-
-def count_chars_in_set(annotations, xref):
-    return npsum([ann[xref] for ann in annotations])
 
 len_cache = {}
 def count_chars_in_doc(file_path, is_susp):
@@ -174,17 +171,38 @@ def count_chars_in_doc(file_path, is_susp):
 
 def case_recall(case, detections, src_len, susp_len):
     """Recall of the detections in detecting the plagiarism case."""
-    Rs_susp = count_chars_in_set(detections, TLEN)
-    Rs_src = count_chars_in_set(detections, SLEN)
+    # Calculate number of chars from the detections that cover the case,
+    # separately for suspicious and source parts.
+    Rs_detections = [det for det in detections if is_overlapping(case, det)]
+    Rs_susp = count_chars2(Rs_detections, TREF, TOFF, TLEN)
+    Rs_src  = count_chars2(Rs_detections, SREF, SOFF, SLEN)
+
+    # Calculate overlap size between the case and the detections,
+    # separately for suspicious and source parts.
     Rss_susp, Rss_src = overlapping_chars(case, detections)
+
+    # Estimate lower (a) and upper (b) bounds of overlap size (Rss),
+    # separately for suspicious and source parts.
     a_susp = max(0, Rs_susp + case.this_length - susp_len)
     a_src = max(0, Rs_src + case.source_length - src_len)
     b_susp = min(Rs_susp, case.this_length)
     b_src = min(Rs_src, case.source_length)
+
+    # Normalize overlap size according to:
+    #   1) overlap size lower and upper bounds,
+    #   2) document length,
+    # separately for suspicious and source parts.
     q_susp, q_src = Rss_susp - a_susp, Rss_src - a_src
     l_susp, l_src = case.this_length - a_susp, case.source_length - a_src
     w_susp, w_src = (b_susp - a_susp) / susp_len, (b_src - a_src) / src_len
-    return (q_susp * w_susp + q_src * w_src) / (l_susp * w_susp + l_src * w_src)
+
+    # Calculate normalized case recall.
+    norm_num = q_susp * w_susp + q_src * w_src
+    norm_denom = l_susp * w_susp + l_src * w_src
+    if norm_denom == 0:
+        return 1
+    else:
+        return norm_num / norm_denom
 
 
 def macro_avg_precision(cases, detections):
@@ -245,9 +263,11 @@ def count_chars(annotations):
 
 
 def count_chars2(annotations, xref, xoff, xlen):
-    """Returns the number of cvhars covered by the annotations with regard to
+    """Returns the number of chars covered by the annotations with regard to
        the keys xref, xoff, and xlen."""
     num_chars = 0
+    if len(annotations) == 0:
+        return 0
     max_length = max((ann[xoff] + ann[xlen] for ann in annotations))
     char_bits = zeros(max_length, dtype=bool)
     xref_index = index_annotations(annotations, xref)
