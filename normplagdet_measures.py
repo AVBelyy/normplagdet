@@ -180,7 +180,7 @@ def micro_avg_recall(cases, detections):
     normalized_denom = 0
     q_zero, l_zero, w_zero, denom_zero = 0, 0, 0, 0
     for ref, off, length in ([TREF, TOFF, TLEN], [SREF, SOFF, SLEN]):
-        docs = index_annotations(cases, ref)
+        docs = index_annotations(cases_detections.keys(), ref)
         for doc in docs:
             doc_cases = docs[doc]
             doc_detections_iters = map(lambda case: cases_detections[case], doc_cases)
@@ -218,7 +218,7 @@ def micro_avg_recall(cases, detections):
                 w_zero += 1
             if l * w == 0:
                 denom_zero += 1
-    print(f"q_zero = {q_zero}, l_zero = {l_zero}, w_zero = {w_zero}, denom_zero = {denom_zero}")
+    #print(f"q_zero = {q_zero}, l_zero = {l_zero}, w_zero = {w_zero}, denom_zero = {denom_zero}")
     return normalized_num / normalized_denom
 
 
@@ -284,16 +284,18 @@ def count_chars_in_doc(file_path, is_susp):
     return len_cache[file_path, is_susp]
 
 
-def case_recall(case, detections, src_len, susp_len):
+def case_recall(case, detections, src_len, susp_len, eps=1e-9):
     """Recall of the detections in detecting the plagiarism case."""
 
     Rs_detections = [det for det in detections if is_overlapping(case, det)]
 
     normalized_num = 0.
     normalized_denom = 0.
+    full_cover_flag = True
     for xref, xoff, xlen, dlen in ((TREF, TOFF, TLEN, susp_len), (SREF, SOFF, SLEN, src_len)):
         # Calculate number of chars from the detections that cover the case.
         detections_len = count_chars2(Rs_detections, xref, xoff, xlen)
+        full_cover_flag &= (detections_len == dlen)
 
         # Calculate intersection length between the case and the detections.
         intersection_len = overlapping_chars(case, detections, xoff, xlen)
@@ -307,15 +309,15 @@ def case_recall(case, detections, src_len, susp_len):
         #   2) document length.
         q = intersection_len - a
         l = case[xlen] - a
-        w = (b - a) / dlen
+        w = (b - a + eps) / dlen
 
         # Calculate part of case recall.
         normalized_num += q * w
         normalized_denom += l * w
 
     # Calculate normalized case recall.
-    if normalized_denom == 0:
-        return 1
+    if full_cover_flag:
+        return 1.
     else:
         return normalized_num / normalized_denom
 
