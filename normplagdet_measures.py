@@ -69,6 +69,7 @@ from numpy.ma import zeros, sum as npsum
 import os
 import sys
 import unittest
+import itertools
 import xml.dom.minidom
 
 
@@ -175,19 +176,21 @@ def micro_avg_recall(cases, detections):
     elif len(cases) == 0 or len(detections) == 0:
         return 0
     cases_detections = true_detections(cases, detections)
-    num_summands, denom_summands = [], []
+    normalized_num = 0
+    normalized_denom = 0
+    q_zero, l_zero, w_zero, denom_zero = 0, 0, 0, 0
     for ref, off, length in ([TREF, TOFF, TLEN], [SREF, SOFF, SLEN]):
         docs = index_annotations(cases, ref)
-        num_summand, denom_summand = 0, 0
         for doc in docs:
             doc_cases = docs[doc]
-            doc_detections = list(set(map(lambda case: cases_detections[case], doc_cases)))
+            doc_detections_iters = map(lambda case: cases_detections[case], doc_cases)
+            doc_detections = list(set(itertools.chain.from_iterable(doc_detections_iters)))
 
             doc_cases_multiannotation = collapse_annotations(doc_cases, doc, off, length)
             doc_detections_multiannotation = collapse_annotations(doc_detections, doc, off, length)
             doc_intersection = intersect_multiannotations(doc_cases_multiannotation, doc_detections_multiannotation)
 
-            doc_length = count_chars_in_doc(doc, False)
+            doc_length = count_chars_in_doc(doc, ref == TREF)
             cases_length = len(doc_cases_multiannotation)
             detections_length = len(doc_detections_multiannotation)
             intersection_length = len(doc_intersection)
@@ -198,11 +201,25 @@ def micro_avg_recall(cases, detections):
             l = cases_length - a
             w = (b - a) / doc_length
 
-            num_summand += q * w
-            denom_summand += l * w
-        num_summands.append(num_summand)
-        denom_summands.append(denom_summand)
-    return (num_summands[0] + num_summands[1]) / (denom_summands[0] + denom_summands[1])
+            assert a >= 0
+            assert b >= 0
+            assert q >= 0
+            assert l >= 0
+            assert w >= 0
+
+            normalized_num += q * w
+            normalized_denom += l * w
+
+            if q == 0:
+                q_zero += 1
+            if l == 0:
+                l_zero += 1
+            if w == 0:
+                w_zero += 1
+            if l * w == 0:
+                denom_zero += 1
+    print(f"q_zero = {q_zero}, l_zero = {l_zero}, w_zero = {w_zero}, denom_zero = {denom_zero}")
+    return normalized_num / normalized_denom
 
 
 def collapse_annotations(annotations, ref, xoff, xlen):
@@ -221,11 +238,16 @@ def insert_annotation_into_multi(ann, ma, xoff, xlen):
     end = begin
     while end < ma.length and ann[xoff] + ann[xlen] >= ma.begin[end]:
         end += 1
-    new_begin = min(ann[xoff], ma.begin[begin])
-    new_end = max(ann[xoff] + ann[xlen], ma.end[end - 1])
-    ma.begin = [ma.begin[i] for i in range(begin)] + [new_begin] + [ma.begin[i] for i in range(end, ma.length)]
-    ma.end = [ma.end[i] for i in range(begin)] + [new_end] + [ma.end[i] for i in range(end, ma.length)]
-    ma.length = len(ma.begin)
+    if ma.length == 0:
+        ma.begin.append(ann[xoff])
+        ma.end.append(ann[xoff] + ann[xlen])
+        ma.length = 1
+    else:
+        new_begin = min(ann[xoff], ma.begin[begin]) if begin < ma.length else ann[xoff]
+        new_end = max(ann[xoff] + ann[xlen], ma.end[end - 1]) if end > 0 else ann[xoff] + ann[xlen]
+        ma.begin = [ma.begin[i] for i in range(begin)] + [new_begin] + [ma.begin[i] for i in range(end, ma.length)]
+        ma.end = [ma.end[i] for i in range(begin)] + [new_end] + [ma.end[i] for i in range(end, ma.length)]
+        ma.length = len(ma.begin)
 
 
 def intersect_multiannotations(ma1, ma2):
@@ -245,6 +267,7 @@ def intersect_multiannotations(ma1, ma2):
             i1 += 1
         else:
             i2 += 1
+    ma.length = len(ma.begin)
     return ma
 
 
@@ -309,7 +332,7 @@ def true_detections(cases, detections):
         if not detections:  # No detections for document tref.
             continue
         for case in cases:
-            case_dets = (det for det in detections if is_overlapping(case, det))
+            case_dets = [det for det in detections if is_overlapping(case, det)]
             true_dets.setdefault(case, []).extend(case_dets)
     return true_dets
 
