@@ -51,26 +51,21 @@ workshops [2,3].
      Software Misuse, September 2010.
 """
 
-
-
 __author__ = "Martin Potthast"
 __email__ = "martin.potthast at uni-weimar dot de"
 __version__ = "1.3"
 __all__ = ["macro_avg_recall_and_precision", "micro_avg_recall_and_precision",
            "granularity", "plagdet_score", "Annotation"]
 
-
 from collections import namedtuple
 import getopt
 import glob
 import math
-from numpy import int8 as npint8
 from numpy.ma import zeros, sum as npsum
 import os
 import sys
 import unittest
 import xml.dom.minidom
-
 
 TREF, TOFF, TLEN = 'this_reference', 'this_offset', 'this_length'
 SREF, SOFF, SLEN = 'source_reference', 'source_offset', 'source_length'
@@ -193,9 +188,9 @@ def overlap_annotation(ann1, ann2):
     tref, sref, ext = ann1[TREF], ann1[SREF], ann1[EXT] and ann2[EXT]
     toff, tlen, soff, slen = 0, 0, 0, 0
     if is_overlapping(ann1, ann2):
-       toff, tlen = overlap_chars(ann1, ann2, TOFF, TLEN)
-       if ext:
-           soff, slen = overlap_chars(ann1, ann2, SOFF, SLEN)
+        toff, tlen = overlap_chars(ann1, ann2, TOFF, TLEN)
+        if ext:
+            soff, slen = overlap_chars(ann1, ann2, SOFF, SLEN)
     return Annotation(tref, toff, tlen, sref, soff, slen, ext)
 
 
@@ -206,10 +201,10 @@ def overlap_chars(ann1, ann2, xoff, xlen):
     max_ann = ann1 if ann1[xoff] >= ann2[xoff] else ann2
     min_ann = ann1 if ann1[xoff] < ann2[xoff] else ann2
     if min_ann[xoff] + min_ann[xlen] > max_ann[xoff]:
-       overlap_start = max_ann[xoff]
-       overlap_end = min(min_ann[xoff] + min_ann[xlen], \
-                         max_ann[xoff] + max_ann[xlen])
-       overlap_length = overlap_end - overlap_start
+        overlap_start = max_ann[xoff]
+        overlap_end = min(min_ann[xoff] + min_ann[xlen],
+                          max_ann[xoff] + max_ann[xlen])
+        overlap_length = overlap_end - overlap_start
     return overlap_start, overlap_length
 
 
@@ -264,7 +259,7 @@ def is_overlapping(ann1, ann2):
     detected = ann1[TREF] == ann2[TREF] and \
                ann2[TOFF] + ann2[TLEN] > ann1[TOFF] and \
                ann2[TOFF] < ann1[TOFF] + ann1[TLEN]
-    if ann1[EXT] == True and ann2[EXT] == True:
+    if ann1[EXT] and ann2[EXT]:
         detected = detected and ann1[SREF] == ann2[SREF] and \
                    ann2[SOFF] + ann2[SLEN] > ann1[SOFF] and \
                    ann2[SOFF] < ann1[SOFF] + ann1[SLEN]
@@ -301,8 +296,8 @@ def extract_annotations_from_file(xmlfile, tagname):
     t_ref = doc.documentElement.getAttribute('reference')
     for node in doc.documentElement.childNodes:
         if node.nodeType == xml.dom.Node.ELEMENT_NODE and \
-           node.hasAttribute('name') and \
-           node.getAttribute('name').endswith(tagname):
+                node.hasAttribute('name') and \
+                node.getAttribute('name').endswith(tagname):
             ann = extract_annotation_from_node(node, t_ref)
             if ann:
                 annotations.add(ann)
@@ -311,15 +306,15 @@ def extract_annotations_from_file(xmlfile, tagname):
 
 def extract_annotation_from_node(xmlnode, t_ref):
     """Returns a plagiarism annotation from an XML feature tag node."""
-    if not (xmlnode.hasAttribute('this_offset') and \
+    if not (xmlnode.hasAttribute('this_offset') and
             xmlnode.hasAttribute('this_length')):
         return False
     t_off = int(xmlnode.getAttribute('this_offset'))
     t_len = int(xmlnode.getAttribute('this_length'))
     s_ref, s_off, s_len, ext = '', 0, 0, False
     if xmlnode.hasAttribute('source_reference') and \
-       xmlnode.hasAttribute('source_offset') and \
-       xmlnode.hasAttribute('source_length'):
+            xmlnode.hasAttribute('source_offset') and \
+            xmlnode.hasAttribute('source_length'):
         s_ref = xmlnode.getAttribute('source_reference')
         s_off = int(xmlnode.getAttribute('source_offset'))
         s_len = int(xmlnode.getAttribute('source_length'))
@@ -347,9 +342,9 @@ class TestPerfMeasures(unittest.TestCase):
         self.assertEqual(0, macro_avg_recall([], ['sth']))
         self.assertEqual(1, macro_avg_recall([self.ann1], [self.ann1]))
         self.assertEqual(1, macro_avg_recall([self.ann2], [self.ann2]))
-        self.assertEqual(0.5, macro_avg_recall([self.ann1, self.ann7], \
+        self.assertEqual(0.5, macro_avg_recall([self.ann1, self.ann7],
                                                [self.ann1]))
-        self.assertEqual(0.5, macro_avg_recall([self.ann2, self.ann8], \
+        self.assertEqual(0.5, macro_avg_recall([self.ann2, self.ann8],
                                                [self.ann2]))
         self.assertEqual(0, macro_avg_recall([self.ann1], [self.ann7]))
         self.assertEqual(0, macro_avg_recall([self.ann2], [self.ann8]))
@@ -372,16 +367,16 @@ class TestPerfMeasures(unittest.TestCase):
         self.assertEqual(0, macro_avg_precision([], ['sth']))
         self.assertEqual(1, macro_avg_precision([self.ann1], [self.ann1]))
         self.assertEqual(1, macro_avg_precision([self.ann2], [self.ann2]))
-        self.assertEqual(1, macro_avg_precision([self.ann1, self.ann7], \
+        self.assertEqual(1, macro_avg_precision([self.ann1, self.ann7],
                                                 [self.ann1]))
-        self.assertEqual(1, macro_avg_precision([self.ann2, self.ann8], \
+        self.assertEqual(1, macro_avg_precision([self.ann2, self.ann8],
                                                 [self.ann2]))
         self.assertEqual(0.5, macro_avg_precision([self.ann1], [self.ann4]))
         self.assertEqual(1, macro_avg_precision([self.ann7], [self.ann10]))
         self.assertEqual(1, macro_avg_precision([self.ann7], [self.ann10]))
-        self.assertEqual(0.75, macro_avg_precision([self.ann7], \
+        self.assertEqual(0.75, macro_avg_precision([self.ann7],
                                                    [self.ann9, self.ann10]))
-        self.assertEqual(0.25, macro_avg_precision([self.ann1], \
+        self.assertEqual(0.25, macro_avg_precision([self.ann1],
                                                    [self.ann3, self.ann4]))
 
     def test_granularity(self):
@@ -455,7 +450,7 @@ def parse_options():
     plag_path, det_path = "undefined", "undefined"
     plag_tag_name, det_tag_name = "plagiarism", "detected-plagiarism"
     for opt, arg in opts:
-        if opt in ("--micro"):
+        if opt in ("--micro",):
             micro_averaged = True
         elif opt in ("-p", "--plag-path"):
             plag_path = arg
@@ -476,7 +471,7 @@ def parse_options():
     if det_path == "undefined":
         print("Detections path undefined. Use option -d or --det-path.")
         sys.exit()
-    return (micro_averaged, plag_path, plag_tag_name, det_path, det_tag_name)
+    return micro_averaged, plag_path, plag_tag_name, det_path, det_tag_name
 
 
 def main(micro_averaged, plag_path, plag_tag_name, det_path, det_tag_name):
@@ -486,7 +481,6 @@ def main(micro_averaged, plag_path, plag_tag_name, det_path, det_tag_name):
     print('Reading', det_path)
     detections = extract_annotations_from_files(det_path, det_tag_name)
     print('Processing... (this may take a while)')
-    rec, prec = 0, 0
     if micro_averaged:
         rec, prec = micro_avg_recall_and_precision(cases, detections)
     else:
@@ -500,5 +494,3 @@ def main(micro_averaged, plag_path, plag_tag_name, det_path, det_tag_name):
 
 if __name__ == '__main__':
     main(*parse_options())
-
-
