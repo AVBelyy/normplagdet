@@ -106,13 +106,13 @@ for xml_path in xmls_paths:
         train_row = {}
         if feature.attrib["name"] != "plagiarism":
             continue
-        # Read raw data
+        # Read raw data.
         suspicious_offset = int(feature.attrib["this_offset"])
         suspicious_length = int(feature.attrib["this_length"])
         source_offset = int(feature.attrib["source_offset"])
         source_length = int(feature.attrib["source_length"])
         source_path = feature.attrib["source_reference"]
-        # Set df values
+        # Set df values.
         train_row["obfuscation"] = feature.attrib["type"]
         train_row["suspicious_path"] = suspicious_path
         train_row["suspicious_offset"] = suspicious_offset
@@ -120,7 +120,7 @@ for xml_path in xmls_paths:
         train_row["source_path"] = source_path
         train_row["source_offset"] = source_offset
         train_row["source_length"] = source_length
-        # Read texts and set values
+        # Read texts and set values.
         source_text = open(os.path.join(data_dir, "src", source_path)).read()
         train_row["suspicious_text"] = suspicious_text[suspicious_offset:suspicious_offset + suspicious_length]
         train_row["source_text"] = source_text[source_offset:source_offset + source_length]
@@ -159,7 +159,6 @@ for path, positions in tqdm(positions_dict.items(), desc="parsing annotations"):
 with open("pan_train_texts.csv") as texts_file, open("pan_train_sentences.csv", "w") as sentences_file:
     header = texts_file.readline().strip().split(",")
     texts_reader = csv.DictReader(texts_file, header)
-    #         sentences_file.write("obfuscation,suspicious_path,source_path,suspicious_sentence_id,source_sentence_id\n")
     sentences_file.write("obfuscation,suspicious_path,source_path,suspicious_start_sentence_id,")
     sentences_file.write("suspicious_end_sentence_id,source_start_sentence_id,source_end_sentence_id\n")
     sentences_writer = csv.writer(sentences_file)
@@ -219,7 +218,7 @@ for path in tqdm(paths, desc="reading sentences"):
             sentences_dict[path][i] = lemmas
             sents_cnt += 1
 
-# Похожесть предложения и текста.
+# Similarity of sentence and text.
 
 pre_detections_list = []
 
@@ -240,7 +239,7 @@ with open(tasks_dir + "pairs") as fin:
         for t1, (susp_sent_i, susp_sent_id) in enumerate(zip(susp_sents_is, susp_sents_ids)):
             susp_lemmas = sentences_dict[susp_path][susp_sent_i]
             susp_lemmas_set = set(susp_lemmas)
-            # Шаг 1: вычисление расстояния по всем эмбеддингам
+            # Step 1: compute distances using token similarity.
             top_dists = []
             for dists in embed_dists:
                 top_dists.append(dists[t1])
@@ -252,14 +251,9 @@ with open(tasks_dir + "pairs") as fin:
             right_num = sum(map(intersection.__contains__, src_lemmas))
             iou_num = sum(map(intersection.__contains__, union))
             left_incl_dist = left_num / len(susp_lemmas)
-            right_incl_dist = 1 - right_num / len(src_lemmas)
-            iou_incl_dist = iou_num / len(union)
-            susp_lens_dist = len(susp_lemmas)
-            src_lens_dist = len(src_lemmas)
-            min_lens_dist = min(len(susp_lemmas), len(src_lemmas))
             top_dists.append([left_incl_dist])
             top_indices = [(susp_sent_id, 0)]
-            # Шаг 2: запись признаков
+            # Step 2: write features.
             for dists, ix in zip(zip(*top_dists), top_indices):
                 features.append(dists)
                 indices.append(ix)
@@ -287,7 +281,7 @@ for pre_detections in pre_detections_list:
     pre_detections = [(b, c, a) for a, b, c in pre_detections if a > threshold]
     detections_list.append(pre_detections)
 
-# Уменьшение granularity на summary 2.0
+# Reduce granularity.
 
 out_detections_list = []
 
