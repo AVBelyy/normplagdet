@@ -1,9 +1,10 @@
 #! /usr/bin/python
 # Copyright (C) 2009 webis.de. All rights reserved.
-"""Plagiarism detection performance measures.
+# Copyright (C) 2018 Anton Belyy.
+"""Normalized plagiarism detection performance measures.
 
 This module implements the measures recall, precision, and granularity
-as described by the authors of [1]. The measures can be calculated
+as described by the authors of [1,4]. The measures can be calculated
 macro-averaged and micro-averaged with the respective functions; each
 one's parameters are iterables of reference plagiarism cases and
 plagiarism detections. The latter are compared with the former in order
@@ -13,16 +14,19 @@ plagdet_score combines recall, precision and granularity values to a
 single value which allows to rank plagiarism detection algorithms.
 
 The parameters 'cases' and 'detections' both must contain instances of
-the Annotation class, a 7-tuple consisting of the following exemplified
+the Annotation class, a 9-tuple consisting of the following exemplified
 values:
 >>> Annotation('suspicious-document00001.txt', 10000, 1000, \
-...            'source-document00001.txt', 5000, 1100, True)
+...            'source-document00001.txt', 5000, 1100, True, \
+...            15000, 10000)
 where the first three values reference a section of text in a
 suspicious document by means of char offset and length, and likewise
 the following three values reference a section of text in a source
-document. The last value specifies whether the annotation is to be
+document. The next value specifies whether the annotation is to be
 treated as an external detection or as an intrinsic detection. In the
 latter case, the precedin values should be set to '', 0, 0, respectively.
+The last two values specify lengths of the suspicious and the source
+documents, respectively.
 
 Finally, this module contains functions to extract plagiarism
 annotations from XML documents which contain tags with a given name
@@ -49,11 +53,16 @@ workshops [2,3].
      Efstathios Stamatatos, and Moshe Koppel, editors, Proceedings of
      PAN at CLEF 2010: Uncovering Plagiarism, Authorship, and Social
      Software Misuse, September 2010.
+
+[4]  Anton Belyy, Marina Dubova, and Dmitry Nekrasov. Improved Evaluation
+     Framework for Complex Plagiarism Detection. In Proceedings of the
+     56th Annual Meeting of the Association for Computational Linguistics
+     (ACL 2018), Melbourne, Australia. July 2018.
 """
 
-__author__ = "Martin Potthast"
-__email__ = "martin.potthast at uni-weimar dot de"
-__version__ = "1.3"
+__author__ = "Anton Belyy"
+__email__ = "anton.belyy at gmail dot com"
+__version__ = "1.0"
 __all__ = ["macro_avg_recall_and_precision", "micro_avg_recall_and_precision",
            "granularity", "plagdet_score", "Annotation"]
 
@@ -72,8 +81,9 @@ import xml.dom.minidom
 TREF, TOFF, TLEN = 'this_reference', 'this_offset', 'this_length'
 SREF, SOFF, SLEN = 'source_reference', 'source_offset', 'source_length'
 EXT = 'is_external'
-Annotation = namedtuple('Annotation', [TREF, TOFF, TLEN, SREF, SOFF, SLEN, EXT])
-TREF, TOFF, TLEN, SREF, SOFF, SLEN, EXT = list(range(7))
+DTLEN, DSLEN = 'document_this_length', 'document_source_length'
+Annotation = namedtuple('Annotation', [TREF, TOFF, TLEN, SREF, SOFF, SLEN, EXT, DTLEN, DSLEN])
+TREF, TOFF, TLEN, SREF, SOFF, SLEN, EXT, DTLEN, DSLEN = list(range(9))
 
 
 class MultiAnnotation:
@@ -85,9 +95,6 @@ class MultiAnnotation:
 
     def __len__(self):
         return reduce((lambda l, i: l + self.end[i] - self.begin[i]), range(self.length), 0)
-
-
-plag_path_ = None
 
 
 def macro_avg_recall_and_precision(cases, detections):
@@ -151,9 +158,7 @@ def macro_avg_recall(cases, detections, debug=False):
         if not detections:  # No detections for document tref.
             continue
         for case in cases:
-            src_len = count_chars_in_doc(case[SREF], False)
-            susp_len = count_chars_in_doc(case[TREF], True)
-            recall_per_case.append(case_recall(case, detections, src_len, susp_len))
+            recall_per_case.append(case_recall(case, detections))
     if debug:
         return sum(recall_per_case) / num_cases, recall_per_case
     else:
@@ -174,18 +179,20 @@ def micro_avg_recall(cases, detections):
     cases_detections = true_detections(cases, detections)
     normalized_num = 0
     normalized_denom = 0
-    for ref, off, length in ([TREF, TOFF, TLEN], [SREF, SOFF, SLEN]):
-        docs = index_annotations(cases_detections.keys(), ref)
-        for doc in docs:
-            doc_cases = docs[doc]
+    for xref, xoff, xlen, dxlen in ((TREF, TOFF, TLEN, DTLEN), (SREF, SOFF, SLEN, DSLEN)):
+        docs = index_annotations(cases_detections.keys(), xref)
+        for doc, doc_cases in docs.items():
+            if len(doc_cases) == 0:
+                continue
+
             doc_detections_iters = map(lambda case: cases_detections[case], doc_cases)
             doc_detections = list(set(itertools.chain.from_iterable(doc_detections_iters)))
 
-            doc_cases_multiannotation = collapse_annotations(doc_cases, doc, off, length)
-            doc_detections_multiannotation = collapse_annotations(doc_detections, doc, off, length)
+            doc_cases_multiannotation = collapse_annotations(doc_cases, doc, xoff, xlen)
+            doc_detections_multiannotation = collapse_annotations(doc_detections, doc, xoff, xlen)
             doc_intersection = intersect_multiannotations(doc_cases_multiannotation, doc_detections_multiannotation)
 
-            doc_length = count_chars_in_doc(doc, ref == TREF)
+            doc_length = doc_cases[0][dxlen]
             cases_length = len(doc_cases_multiannotation)
             detections_length = len(doc_detections_multiannotation)
             intersection_length = len(doc_intersection)
@@ -251,22 +258,7 @@ def intersect_multiannotations(ma1, ma2):
     return ma
 
 
-len_cache = {}
-
-# TODO: get rid of global variables
-def count_chars_in_doc(file_path, is_susp):
-    global len_cache
-    if (file_path, is_susp) not in len_cache:
-        if is_susp:
-            file_path_ = plag_path_ + "/../../susp/" + file_path
-        else:
-            file_path_ = plag_path_ + "/../../src/" + file_path
-        len_cache[file_path, is_susp] = len(open(file_path_).read())
-
-    return len_cache[file_path, is_susp]
-
-
-def case_recall(case, detections, src_len, susp_len, eps=1e-9):
+def case_recall(case, detections, eps=1e-16):
     """Recall of the detections in detecting the plagiarism case."""
 
     rs_detections = [det for det in detections if is_overlapping(case, det)]
@@ -274,16 +266,16 @@ def case_recall(case, detections, src_len, susp_len, eps=1e-9):
     normalized_num = 0.
     normalized_denom = 0.
     full_cover_flag = True
-    for xref, xoff, xlen, dlen in ((TREF, TOFF, TLEN, susp_len), (SREF, SOFF, SLEN, src_len)):
+    for xref, xoff, xlen, dlen in ((TREF, TOFF, TLEN, DTLEN), (SREF, SOFF, SLEN, DSLEN)):
         # Calculate number of chars from the detections that cover the case.
         detections_len = count_chars2(rs_detections, xref, xoff, xlen)
-        full_cover_flag &= (detections_len == dlen)
+        full_cover_flag &= (detections_len == case[dlen])
 
         # Calculate intersection length between the case and the detections.
         intersection_len = overlapping_chars(case, detections, xoff, xlen)
 
         # Estimate lower (a) and upper (b) bounds of intersection length.
-        a = max(0, detections_len + case[xlen] - dlen)
+        a = max(0, detections_len + case[xlen] - case[dlen])
         b = min(detections_len, case[xlen])
 
         # Normalize overlap size according to:
@@ -291,7 +283,7 @@ def case_recall(case, detections, src_len, susp_len, eps=1e-9):
         #   2) document length.
         q = intersection_len - a
         l = case[xlen] - a
-        w = (b - a + eps) / dlen
+        w = (b - a + eps) / case[dlen]
 
         # Calculate part of case recall.
         normalized_num += q * w
@@ -324,12 +316,13 @@ def true_detections(cases, detections):
 def overlap_annotation(ann1, ann2):
     """Returns an Annotation that annotates overlaps between ann1 and ann2."""
     tref, sref, ext = ann1[TREF], ann1[SREF], ann1[EXT] and ann2[EXT]
+    dtlen, dslen = ann1[DTLEN], ann1[DSLEN]
     toff, tlen, soff, slen = 0, 0, 0, 0
     if is_overlapping(ann1, ann2):
         toff, tlen = overlap_chars(ann1, ann2, TOFF, TLEN)
         if ext:
             soff, slen = overlap_chars(ann1, ann2, SOFF, SLEN)
-    return Annotation(tref, toff, tlen, sref, soff, slen, ext)
+    return Annotation(tref, toff, tlen, sref, soff, slen, ext, dtlen, dslen)
 
 
 def overlap_chars(ann1, ann2, xoff, xlen):
@@ -412,7 +405,7 @@ def index_annotations(annotations, xref=TREF):
     return index
 
 
-def extract_annotations_from_files(path, tagname):
+def extract_annotations_from_files(path, tagname, this_path, src_path):
     """Returns a set of plagiarism annotations from XML files below path."""
     if not os.path.exists(path):
         print("Path not accessible:", path)
@@ -421,11 +414,11 @@ def extract_annotations_from_files(path, tagname):
     xmlfiles = glob.glob(os.path.join(path, '*.xml'))
     xmlfiles.extend(glob.glob(os.path.join(path, os.path.join('*', '*.xml'))))
     for xmlfile in xmlfiles:
-        annotations.update(extract_annotations_from_file(xmlfile, tagname))
+        annotations.update(extract_annotations_from_file(xmlfile, tagname, this_path, src_path))
     return annotations
 
 
-def extract_annotations_from_file(xmlfile, tagname):
+def extract_annotations_from_file(xmlfile, tagname, this_path, src_path):
     """Returns a set of plagiarism annotations from an XML file."""
     doc = xml.dom.minidom.parse(xmlfile)
     annotations = set()
@@ -436,13 +429,13 @@ def extract_annotations_from_file(xmlfile, tagname):
         if node.nodeType == xml.dom.Node.ELEMENT_NODE and \
                 node.hasAttribute('name') and \
                 node.getAttribute('name').endswith(tagname):
-            ann = extract_annotation_from_node(node, t_ref)
+            ann = extract_annotation_from_node(node, t_ref, this_path, src_path)
             if ann:
                 annotations.add(ann)
     return annotations
 
 
-def extract_annotation_from_node(xmlnode, t_ref):
+def extract_annotation_from_node(xmlnode, t_ref, this_path, src_path):
     """Returns a plagiarism annotation from an XML feature tag node."""
     if not (xmlnode.hasAttribute('this_offset') and
             xmlnode.hasAttribute('this_length')):
@@ -450,6 +443,7 @@ def extract_annotation_from_node(xmlnode, t_ref):
     t_off = int(xmlnode.getAttribute('this_offset'))
     t_len = int(xmlnode.getAttribute('this_length'))
     s_ref, s_off, s_len, ext = '', 0, 0, False
+    d_t_len, d_s_len = 0, 0
     if xmlnode.hasAttribute('source_reference') and \
             xmlnode.hasAttribute('source_offset') and \
             xmlnode.hasAttribute('source_length'):
@@ -457,23 +451,29 @@ def extract_annotation_from_node(xmlnode, t_ref):
         s_off = int(xmlnode.getAttribute('source_offset'))
         s_len = int(xmlnode.getAttribute('source_length'))
         ext = True
-    return Annotation(t_ref, t_off, t_len, s_ref, s_off, s_len, ext)
+        d_t_len = len(open(this_path + t_ref).read())
+        d_s_len = len(open(src_path + s_ref).read())
+    return Annotation(t_ref, t_off, t_len, s_ref, s_off, s_len, ext, d_t_len, d_s_len)
 
 
-# TODO: add relevant tests
 class TestPerfMeasures(unittest.TestCase):
     """Unit tests for the plagiarism detection performance measures."""
 
-    ann1 = Annotation('tref1', 0, 100, 'sref1', 0, 100, True)
-    ann2 = Annotation('tref1', 0, 100, '', 0, 0, False)
-    ann3 = Annotation('tref1', 100, 100, 'sref1', 100, 100, True)
-    ann4 = Annotation('tref1', 0, 200, 'sref1', 0, 200, True)
-    ann5 = Annotation('tref1', 0, 1, 'sref1', 0, 1, True)
-    ann6 = Annotation('tref1', 99, 1, 'sref1', 99, 1, True)
-    ann7 = Annotation('tref2', 0, 100, 'sref2', 0, 100, True)
-    ann8 = Annotation('tref2', 0, 100, '', 0, 0, False)
-    ann9 = Annotation('tref2', 50, 100, 'sref2', 50, 100, True)
-    ann10 = Annotation('tref2', 25, 75, 'sref2', 25, 75, True)
+    ann0 = Annotation('tref1', 0, 0, 'sref1', 0, 0, True, 1000, 1000)
+    ann1 = Annotation('tref1', 0, 100, 'sref1', 0, 100, True, 1000, 1000)
+    ann2 = Annotation('tref1', 0, 100, '', 0, 0, False, 1000, 1000)
+    ann3 = Annotation('tref1', 100, 100, 'sref1', 100, 100, True, 1000, 1000)
+    ann4 = Annotation('tref1', 0, 200, 'sref1', 0, 200, True, 1000, 1000)
+    ann5 = Annotation('tref1', 0, 1, 'sref1', 0, 1, True, 1000, 1000)
+    ann6 = Annotation('tref1', 99, 1, 'sref1', 99, 1, True, 1000, 1000)
+    ann7 = Annotation('tref2', 0, 100, 'sref2', 0, 100, True, 1000, 1000)
+    ann8 = Annotation('tref2', 0, 100, '', 0, 0, False, 1000, 1000)
+    ann9 = Annotation('tref2', 50, 100, 'sref2', 50, 100, True, 1000, 1000)
+    ann10 = Annotation('tref2', 25, 75, 'sref2', 25, 75, True, 1000, 1000)
+    ann11 = Annotation('tref3', 0, 100, 'sref3', 0, 20, True, 100, 100)
+    ann12 = Annotation('tref3', 0, 100, 'sref3', 0, 5, True, 100, 100)
+    ann13 = Annotation('tref3', 0, 100, 'sref3', 0, 0, True, 100, 100)
+    ann14 = Annotation('tref3', 0, 10, 'sref3', 0, 10, True, 100, 100)
 
     def test_macro_averaged_recall(self):
         self.assertEqual(1, macro_avg_recall([], []))
@@ -490,8 +490,7 @@ class TestPerfMeasures(unittest.TestCase):
 
     def test_case_recall(self):
         self.assertEqual(0, case_recall(self.ann1, []))
-        self.assertEqual(1, case_recall(self.ann1, [self.ann1]))
-        self.assertEqual(0.5, case_recall(self.ann1, [self.ann2]))
+        self.assertEqual(0, case_recall(self.ann1, [self.ann0]))
         self.assertEqual(0, case_recall(self.ann1, [self.ann3]))
         self.assertEqual(1, case_recall(self.ann1, [self.ann4]))
         self.assertEqual(1, case_recall(self.ann1, [self.ann4, self.ann7]))
@@ -499,6 +498,9 @@ class TestPerfMeasures(unittest.TestCase):
         self.assertEqual(0.5, case_recall(self.ann7, [self.ann9]))
         self.assertEqual(0.75, case_recall(self.ann7, [self.ann10]))
         self.assertEqual(0.75, case_recall(self.ann7, [self.ann9, self.ann10]))
+        self.assertEqual(0.25, case_recall(self.ann11, [self.ann12]))
+        self.assertEqual(0, case_recall(self.ann11, [self.ann13]))
+        self.assertEqual(0.5, case_recall(self.ann11, [self.ann14]))
 
     def test_macro_averaged_precision(self):
         self.assertEqual(1, macro_avg_precision([], []))
@@ -579,14 +581,14 @@ def parse_options():
     """Parses the command line options."""
     try:
         long_options = ["micro", "plag-path=", "plag-tag=", "det-path=",
-                        "det-tag=", "help"]
-        opts, _ = getopt.getopt(sys.argv[1:], "p:d:h", long_options)
+                        "det-tag=", "this-path=", "src-path=", "help"]
+        opts, _ = getopt.getopt(sys.argv[1:], "p:d:t:s:h", long_options)
     except getopt.GetoptError as err:
         print(str(err))
         usage()
         sys.exit(2)
     micro_averaged = False
-    plag_path, det_path = "undefined", "undefined"
+    plag_path, det_path, this_path, src_path = "undefined", "undefined", "undefined", "undefined"
     plag_tag_name, det_tag_name = "plagiarism", "detected-plagiarism"
     for opt, arg in opts:
         if opt in ("--micro",):
@@ -597,6 +599,10 @@ def parse_options():
             plag_tag_name = arg
         elif opt in ("-d", "--det-path"):
             det_path = arg
+        elif opt in ("-t", "--this-path"):
+            this_path = arg
+        elif opt in ("-s", "--src-path"):
+            src_path = arg
         elif opt == "--det-tag":
             det_tag_name = arg
         elif opt in ("-h", "--help"):
@@ -610,17 +616,21 @@ def parse_options():
     if det_path == "undefined":
         print("Detections path undefined. Use option -d or --det-path.")
         sys.exit()
-    return (micro_averaged, plag_path, plag_tag_name, det_path, det_tag_name)
+    if this_path == "undefined":
+        print("Suspicious documents' path undefined. Use option -t or --this-path.")
+        sys.exit()
+    if src_path == "undefined":
+        print("Source documents' path undefined. Use option -s or --src-path.")
+        sys.exit()
+    return micro_averaged, plag_path, plag_tag_name, det_path, det_tag_name, this_path, src_path
 
 
-def main(micro_averaged, plag_path, plag_tag_name, det_path, det_tag_name):
-    global plag_path_
-    plag_path_ = plag_path
+def main(micro_averaged, plag_path, plag_tag_name, det_path, det_tag_name, this_path, src_path):
     """Main method of this module."""
     print('Reading', plag_path)
-    cases = extract_annotations_from_files(plag_path, plag_tag_name)
+    cases = extract_annotations_from_files(plag_path, plag_tag_name, this_path, src_path)
     print('Reading', det_path)
-    detections = extract_annotations_from_files(det_path, det_tag_name)
+    detections = extract_annotations_from_files(det_path, det_tag_name, this_path, src_path)
     print('Processing... (this may take a while)')
     if micro_averaged:
         rec, prec = micro_avg_recall_and_precision(cases, detections)
