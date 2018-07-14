@@ -1,0 +1,7 @@
+.cache/
+.idea/
+predictions/
+
+*.csv
+*.dump
+.DS_Store
